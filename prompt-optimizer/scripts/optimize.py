@@ -42,8 +42,38 @@ _PROVIDER_DEFAULTS = {
 }
 
 
+def _first_env_path(*names: str) -> str:
+    """Return the first configured environment path, expanded to an absolute path."""
+    for name in names:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return os.path.abspath(os.path.expanduser(value))
+    return ""
+
+
 def _hermes_dir() -> str:
-    return os.path.join(os.environ.get("LOCALAPPDATA", ""), "hermes")
+    """
+    Locate the Hermes Agent configuration directory.
+
+    This mirrors README.md: prompt-optimizer reuses the provider/model from
+    Hermes config.yaml and credentials from Hermes .env/auth.json. Search order:
+      1. Official Hermes home env vars, with HERMES_HOME first.
+      2. Windows LOCALAPPDATA layout: <LOCALAPPDATA>/hermes.
+      3. Unix/XDG layout: <XDG_CONFIG_HOME or ~/.config>/hermes.
+    """
+    hermes_home = _first_env_path("HERMES_HOME", "HERMES_AGENT_HOME")
+    if hermes_home:
+        return hermes_home
+
+    local_app_data = _first_env_path("LOCALAPPDATA")
+    if local_app_data:
+        return os.path.join(local_app_data, "hermes")
+
+    xdg_config_home = _first_env_path("XDG_CONFIG_HOME")
+    if xdg_config_home:
+        return os.path.join(xdg_config_home, "hermes")
+
+    return os.path.join(os.path.expanduser("~"), ".config", "hermes")
 
 
 def _read_config_yaml() -> dict:
