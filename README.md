@@ -4,9 +4,18 @@ Personal skill tap for [Hermes Agent](https://hermes-agent.nousresearch.com/).
 
 ## Install
 
+Add this tap as a skill source, then install the skills you need:
+
 ```bash
+# Register the tap (one-time)
 hermes skills tap add countrvl/hermes-skills
+
+# Install individual skills
+hermes skills install countrvl/hermes-skills/prompt-optimizer
 ```
+
+`tap add` only registers the source — it does **not** auto-install everything.
+Pick and install only the skills you want.
 
 ## Skills
 
