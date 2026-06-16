@@ -6,6 +6,7 @@ Based on OpenAI Cookbook "Optimize Prompts" methodology.
 Usage:
   python optimize.py check --prompt "..." [--examples '[...]']
   python optimize.py rewrite --prompt "..." --check-result '{"contradiction":...}' [--examples '[...]']
+  python optimize.py rewrite --prompt "..." --issues '["Fix missing JSON schema"]' [--examples '[...]']
 
 Environment:
   PROMPT_OPTIMIZER_API_KEY  — API key (falls back to OPENAI_API_KEY, HERMES_API_KEY)
@@ -563,6 +564,62 @@ async def cmd_check(prompt: str, examples: Optional[list[dict]] = None) -> dict:
     }
 
 
+def manual_issues_to_check_result(manual_issues: Any) -> dict:
+    """Convert manually supplied issues into the check_result structure."""
+
+    empty_section = {"has_issues": False, "issues": []}
+    check_result = {
+        "contradiction": empty_section.copy(),
+        "format": empty_section.copy(),
+        "fewshot": empty_section.copy(),
+        "has_any_issues": False,
+    }
+
+    if isinstance(manual_issues, list):
+        issues = [str(issue) for issue in manual_issues if str(issue).strip()]
+        check_result["format"] = {"has_issues": bool(issues), "issues": issues}
+    elif isinstance(manual_issues, dict):
+        has_sections = any(
+            section in manual_issues for section in ("contradiction", "format", "fewshot")
+        )
+        if "issues" in manual_issues and not has_sections:
+            value = manual_issues.get("issues", [])
+            issues = value if isinstance(value, list) else [value]
+            normalized_issues = [str(issue) for issue in issues if str(issue).strip()]
+            check_result["format"] = {
+                "has_issues": bool(normalized_issues),
+                "issues": normalized_issues,
+            }
+        else:
+            for section in ("contradiction", "format", "fewshot"):
+                value = manual_issues.get(section, [])
+                if isinstance(value, dict):
+                    issues = value.get("issues", [])
+                elif isinstance(value, list):
+                    issues = value
+                elif value:
+                    issues = [value]
+                else:
+                    issues = []
+
+                normalized_issues = [str(issue) for issue in issues if str(issue).strip()]
+                check_result[section] = {
+                    "has_issues": bool(normalized_issues),
+                    "issues": normalized_issues,
+                }
+    elif manual_issues:
+        check_result["format"] = {
+            "has_issues": True,
+            "issues": [str(manual_issues)],
+        }
+
+    check_result["has_any_issues"] = any(
+        check_result[section]["has_issues"]
+        for section in ("contradiction", "format", "fewshot")
+    )
+    return check_result
+
+
 async def cmd_rewrite(
     prompt: str,
     check_result: dict,
@@ -633,12 +690,22 @@ def main():
     )
 
     # rewrite
-    p_rewrite = sub.add_parser("rewrite", help="Rewrite prompt based on check results")
+    p_rewrite = sub.add_parser(
+        "rewrite",
+        help="Rewrite prompt based on check results or manual issues",
+    )
     p_rewrite.add_argument("--prompt", required=True, help="The original prompt text")
-    p_rewrite.add_argument(
+    rewrite_source = p_rewrite.add_mutually_exclusive_group(required=True)
+    rewrite_source.add_argument(
         "--check-result",
-        required=True,
         help="JSON output from 'check' command",
+    )
+    rewrite_source.add_argument(
+        "--issues",
+        help=(
+            "Manual issues as JSON: either a list of strings, or an object with "
+            "contradiction/format/fewshot sections"
+        ),
     )
     p_rewrite.add_argument(
         "--examples",
@@ -668,11 +735,20 @@ def main():
         if args.mode == "check":
             result = await cmd_check(args.prompt, examples)
         else:  # rewrite
-            try:
-                check_result = json.loads(args.check_result)
-            except json.JSONDecodeError as e:
-                print(f"ERROR: Invalid --check-result JSON: {e}", file=sys.stderr)
-                sys.exit(1)
+            if args.check_result:
+                try:
+                    check_result = json.loads(args.check_result)
+                except json.JSONDecodeError as e:
+                    print(f"ERROR: Invalid --check-result JSON: {e}", file=sys.stderr)
+                    sys.exit(1)
+            else:
+                try:
+                    manual_issues = json.loads(args.issues)
+                except json.JSONDecodeError as e:
+                    print(f"ERROR: Invalid --issues JSON: {e}", file=sys.stderr)
+                    sys.exit(1)
+                check_result = manual_issues_to_check_result(manual_issues)
+
             result = await cmd_rewrite(args.prompt, check_result, examples)
 
         print(json.dumps(result, ensure_ascii=False, indent=2))
