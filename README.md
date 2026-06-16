@@ -12,10 +12,16 @@ hermes skills tap add countrvl/hermes-skills
 
 # Install individual skills
 hermes skills install countrvl/hermes-skills/prompt-optimizer
+
+# Install prompt-optimizer runtime dependencies
+pip install -r prompt-optimizer/requirements.txt
 ```
 
 `tap add` only registers the source — it does **not** auto-install everything.
-Pick and install only the skills you want.
+Pick and install only the skills you want. `prompt-optimizer` also needs its Python
+runtime dependencies installed explicitly; at minimum that is `httpx` for LLM API
+requests. If your Hermes Agent installs skills into a separate skill directory, run
+`pip install -r requirements.txt` from inside the installed `prompt-optimizer` directory.
 
 ## Skills
 
