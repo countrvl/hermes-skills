@@ -9,7 +9,7 @@ Usage:
   python optimize.py rewrite --prompt "..." --issues '["Fix missing JSON schema"]' [--examples '[...]']
 
 Environment:
-  PROMPT_OPTIMIZER_API_KEY  — API key (falls back to OPENAI_API_KEY, HERMES_API_KEY)
+  PROMPT_OPTIMIZER_API_KEY  — API key (falls back to provider env vars, OPENAI_API_KEY, HERMES_API_KEY)
   PROMPT_OPTIMIZER_API_BASE — API base URL (default: https://api.deepseek.com/v1)
   PROMPT_OPTIMIZER_MODEL    — Model name (default: deepseek-chat)
 """
@@ -42,7 +42,7 @@ _PROVIDER_DEFAULTS = {
     "google": {"base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "model": "gemini-2.5-flash"},
     "groq": {"base_url": "https://api.groq.com/openai/v1", "model": "llama-3.3-70b-versatile"},
     "xai": {"base_url": "https://api.x.ai/v1", "model": "grok-3-beta"},
-    "anthropic": {"base_url": "https://api.anthropic.com/v1", "model": "claude-3-5-sonnet-latest"},
+    "anthropic": {"base_url": "https://api.anthropic.com/v1", "model": "claude-sonnet-4-6"},
 }
 
 
@@ -150,6 +150,28 @@ def _read_env_value(env_path: str, key: str) -> str:
     return ""
 
 
+def _provider_api_key_env_vars(provider: str, label: str = "") -> tuple[str, ...]:
+    """Return provider-specific API key env vars, with auth.json label first."""
+    provider_env_vars = {
+        "anthropic": ("ANTHROPIC_API_KEY", "CLAUDE_API_KEY"),
+        "deepseek": ("DEEPSEEK_API_KEY",),
+        "openai": ("OPENAI_API_KEY",),
+        "openrouter": ("OPENROUTER_API_KEY",),
+        "google": ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
+        "groq": ("GROQ_API_KEY",),
+        "xai": ("XAI_API_KEY",),
+    }
+
+    candidates = []
+    if label:
+        candidates.append(label)
+    candidates.extend(provider_env_vars.get(provider, ()))
+
+    # Preserve order while avoiding duplicate lookups when auth.json label matches
+    # a conventional env var name.
+    return tuple(dict.fromkeys(candidates))
+
+
 def _resolve_config() -> tuple[str, str, str, str]:
     """
     Resolve (api_key, base_url, model, provider) from Hermes configuration.
@@ -180,15 +202,21 @@ def _resolve_config() -> tuple[str, str, str, str]:
         defaults = _PROVIDER_DEFAULTS.get(provider, {})
         model = defaults.get("model", "deepseek-chat")
 
-    # 4. API key: use auth.json label to find the right env var
+    # 4. API key: use auth.json label first, then provider-specific env vars.
+    #    Check process env before Hermes .env so explicit shell exports win.
+    label = provider_auth.get("label", "")
+    provider_key_env_vars = _provider_api_key_env_vars(provider, label)
     if not api_key:
-        label = provider_auth.get("label", "")
-        if label:
-            api_key = os.environ.get(label, "")
-        if not api_key and label:
-            # Try .env file
-            env_path = os.path.join(_hermes_dir(), ".env")
-            api_key = _read_env_value(env_path, label)
+        for var in provider_key_env_vars:
+            api_key = os.environ.get(var, "")
+            if api_key:
+                break
+    if not api_key:
+        env_path = os.path.join(_hermes_dir(), ".env")
+        for var in provider_key_env_vars:
+            api_key = _read_env_value(env_path, var)
+            if api_key:
+                break
 
     # 5. Standard fallbacks
     if not api_key:
@@ -198,7 +226,7 @@ def _resolve_config() -> tuple[str, str, str, str]:
                 break
     if not api_key:
         env_path = os.path.join(_hermes_dir(), ".env")
-        for var in ("DEEPSEEK_API_KEY", "OPENAI_API_KEY"):
+        for var in ("OPENAI_API_KEY", "HERMES_API_KEY"):
             api_key = _read_env_value(env_path, var)
             if api_key:
                 break
@@ -489,7 +517,7 @@ async def call_llm(
     """Call the configured LLM provider and parse JSON from response."""
     if not API_KEY:
         raise RuntimeError(
-            "No API key found. Set PROMPT_OPTIMIZER_API_KEY, OPENAI_API_KEY, or HERMES_API_KEY."
+            "No API key found. Set PROMPT_OPTIMIZER_API_KEY, a provider-specific API key, OPENAI_API_KEY, or HERMES_API_KEY."
         )
 
     if PROVIDER == "anthropic" or _is_anthropic_base_url(API_BASE):

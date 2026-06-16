@@ -36,12 +36,8 @@ the few-shot consistency checker runs only when `examples` are provided. After
 checks complete, a surgical rewriter can apply fixes. Each checker is a separate
 LLM call.
 
-**The skill reuses your Hermes model/provider only when that provider exposes an
-OpenAI-compatible chat completions API** (`/chat/completions`). It reads
+**The skill reuses your Hermes model/provider for supported providers.** It reads
 `config.yaml` → `model.provider` + `model.default` and credentials from Hermes
-`.env`/`auth.json`, but the runtime is not a universal adapter for every Hermes
-provider. Native APIs such as Anthropic Messages are not called directly; use an
-OpenAI-compatible proxy/base URL via `PROMPT_OPTIMIZER_API_BASE` and set the
-matching `PROMPT_OPTIMIZER_MODEL`, or choose one of the supported compatible
-providers (DeepSeek, OpenAI, OpenRouter, Google OpenAI-compatible endpoint, Groq,
-or xAI).
+`.env`/`auth.json`. OpenAI-compatible providers use `/chat/completions`; Anthropic
+uses the native Messages API. Supported defaults: DeepSeek, OpenAI, OpenRouter,
+Google OpenAI-compatible endpoint, Groq, xAI, and Anthropic.
