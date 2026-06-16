@@ -25,9 +25,10 @@ Pick and install only the skills you want.
 
 ## How it works
 
-`prompt-optimizer` runs three specialized checkers in parallel — contradiction
-detector, format validator, and few-shot consistency checker — followed by a
-surgical rewriter. Each checker is a separate LLM call.
+`prompt-optimizer` always runs contradiction and format checkers in parallel;
+the few-shot consistency checker runs only when `examples` are provided. After
+checks complete, a surgical rewriter can apply fixes. Each checker is a separate
+LLM call.
 
 **The skill uses the same model and provider configured in your Hermes Agent**
 (`config.yaml` → `model.provider` + `model.default`). API credentials are read
