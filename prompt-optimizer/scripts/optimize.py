@@ -343,7 +343,16 @@ async def call_llm(
     max_tokens: int = 4096,
 ) -> dict:
     """Call OpenAI-compatible chat completions API, parse JSON from response."""
-    import httpx
+    try:
+        import httpx
+    except ImportError as exc:
+        raise RuntimeError(
+            "Required dependency 'httpx' is not installed. "
+            "Install prompt-optimizer runtime dependencies with: "
+            "pip install -r prompt-optimizer/requirements.txt "
+            "(or run: pip install httpx). "
+            "Without httpx, the prompt-optimizer runtime cannot call the LLM API."
+        ) from exc
 
     if not API_KEY:
         raise RuntimeError(
