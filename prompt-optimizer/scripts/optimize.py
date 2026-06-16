@@ -31,12 +31,16 @@ from typing import Any, Optional
 #   4. Hermes .env file → API key by provider's env-var name
 #   5. Standard fallback env vars (OPENAI_API_KEY, HERMES_API_KEY)
 
-# Known provider defaults (used when auth.json is unavailable)
+# Known OpenAI-compatible provider defaults (used when auth.json is unavailable).
+#
+# Important: call_llm() currently talks only to /chat/completions. Providers with
+# native, non-OpenAI-compatible APIs (for example Anthropic Messages API) must be
+# used through an OpenAI-compatible proxy endpoint configured explicitly via
+# PROMPT_OPTIMIZER_API_BASE.
 _PROVIDER_DEFAULTS = {
     "deepseek": {"base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat"},
     "openai": {"base_url": "https://api.openai.com/v1", "model": "gpt-4o"},
     "openrouter": {"base_url": "https://openrouter.ai/api/v1", "model": "openai/gpt-4o"},
-    "anthropic": {"base_url": "https://api.anthropic.com/v1", "model": "claude-sonnet-4-20250514"},
     "google": {"base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "model": "gemini-2.5-flash"},
     "groq": {"base_url": "https://api.groq.com/openai/v1", "model": "llama-3.3-70b-versatile"},
     "xai": {"base_url": "https://api.x.ai/v1", "model": "grok-3-beta"},
@@ -147,9 +151,9 @@ def _read_env_value(env_path: str, key: str) -> str:
     return ""
 
 
-def _resolve_config() -> tuple[str, str, str]:
+def _resolve_config() -> tuple[str, str, str, str]:
     """
-    Resolve (api_key, base_url, model) from Hermes configuration.
+    Resolve (api_key, base_url, model, provider) from Hermes configuration.
     Returns empty strings for missing values.
     """
     # 1. Explicit overrides (user set these intentionally)
@@ -200,10 +204,10 @@ def _resolve_config() -> tuple[str, str, str]:
             if api_key:
                 break
 
-    return api_key, base_url.rstrip("/"), model
+    return api_key, base_url.rstrip("/"), model, provider
 
 
-API_KEY, API_BASE, MODEL = _resolve_config()
+API_KEY, API_BASE, MODEL, PROVIDER = _resolve_config()
 MAX_RETRIES = 2
 TIMEOUT = 60
 
@@ -343,6 +347,20 @@ async def call_llm(
     max_tokens: int = 4096,
 ) -> dict:
     """Call OpenAI-compatible chat completions API, parse JSON from response."""
+    if PROVIDER not in _PROVIDER_DEFAULTS and not os.environ.get("PROMPT_OPTIMIZER_API_BASE", ""):
+        raise RuntimeError(
+            f"Hermes provider '{PROVIDER}' is not known to be OpenAI-compatible. "
+            "prompt-optimizer currently calls only the OpenAI-compatible "
+            "/chat/completions endpoint. Set PROMPT_OPTIMIZER_API_BASE to an "
+            "OpenAI-compatible proxy/base URL and PROMPT_OPTIMIZER_MODEL to the "
+            "matching model, or choose an OpenAI-compatible Hermes provider."
+        )
+
+    if not API_KEY:
+        raise RuntimeError(
+            "No API key found. Set PROMPT_OPTIMIZER_API_KEY, OPENAI_API_KEY, or HERMES_API_KEY."
+        )
+
     try:
         import httpx
     except ImportError as exc:
@@ -353,11 +371,6 @@ async def call_llm(
             "(or run: pip install httpx). "
             "Without httpx, the prompt-optimizer runtime cannot call the LLM API."
         ) from exc
-
-    if not API_KEY:
-        raise RuntimeError(
-            "No API key found. Set PROMPT_OPTIMIZER_API_KEY, OPENAI_API_KEY, or HERMES_API_KEY."
-        )
 
     url = f"{API_BASE}/chat/completions"
     headers = {
