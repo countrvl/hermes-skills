@@ -84,17 +84,22 @@ def _read_config_yaml() -> dict:
         with open(config_path) as f:
             in_model = False
             for line in f:
-                stripped = line.strip()
-                if stripped.startswith("model:"):
+                raw_line = line.rstrip("\n")
+                stripped = raw_line.strip()
+                indent = len(raw_line) - len(raw_line.lstrip(" \t"))
+
+                if stripped.startswith("model:") and indent == 0:
                     in_model = True
                     continue
+
                 if in_model:
+                    if stripped and indent == 0:
+                        in_model = False  # left model section
+                        continue
                     if stripped.startswith("provider:"):
                         result["provider"] = stripped.split(":", 1)[1].strip().strip('"').strip("'")
                     elif stripped.startswith("default:"):
                         result["model"] = stripped.split(":", 1)[1].strip().strip('"').strip("'")
-                    elif stripped and not stripped.startswith(" ") and not stripped.startswith("\t"):
-                        in_model = False  # left model section
     except (OSError, IOError):
         pass
     return result
