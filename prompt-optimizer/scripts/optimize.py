@@ -31,12 +31,10 @@ from typing import Any, Optional
 #   4. Hermes .env file → API key by provider's env-var name
 #   5. Standard fallback env vars (OPENAI_API_KEY, HERMES_API_KEY)
 
-# Known OpenAI-compatible provider defaults (used when auth.json is unavailable).
+# Known provider defaults (used when auth.json is unavailable).
 #
-# Important: call_llm() currently talks only to /chat/completions. Providers with
-# native, non-OpenAI-compatible APIs (for example Anthropic Messages API) must be
-# used through an OpenAI-compatible proxy endpoint configured explicitly via
-# PROMPT_OPTIMIZER_API_BASE.
+# Most providers below are OpenAI-compatible and use /chat/completions. Anthropic
+# is handled through its native Messages API by call_llm() dispatch.
 _PROVIDER_DEFAULTS = {
     "deepseek": {"base_url": "https://api.deepseek.com/v1", "model": "deepseek-chat"},
     "openai": {"base_url": "https://api.openai.com/v1", "model": "gpt-4o"},
@@ -44,6 +42,7 @@ _PROVIDER_DEFAULTS = {
     "google": {"base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "model": "gemini-2.5-flash"},
     "groq": {"base_url": "https://api.groq.com/openai/v1", "model": "llama-3.3-70b-versatile"},
     "xai": {"base_url": "https://api.x.ai/v1", "model": "grok-3-beta"},
+    "anthropic": {"base_url": "https://api.anthropic.com/v1", "model": "claude-3-5-sonnet-latest"},
 }
 
 
@@ -340,27 +339,32 @@ FEWSHOT_REWRITER_PROMPT = """Ты — **Few-Shot-Rewriter**. Твоя задач
 
 # ── LLM API Client ────────────────────────────────────────────
 
-async def call_llm(
-    system_prompt: str,
-    user_message: str,
-    temperature: float = 0.1,
-    max_tokens: int = 4096,
-) -> dict:
-    """Call OpenAI-compatible chat completions API, parse JSON from response."""
-    if PROVIDER not in _PROVIDER_DEFAULTS and not os.environ.get("PROMPT_OPTIMIZER_API_BASE", ""):
-        raise RuntimeError(
-            f"Hermes provider '{PROVIDER}' is not known to be OpenAI-compatible. "
-            "prompt-optimizer currently calls only the OpenAI-compatible "
-            "/chat/completions endpoint. Set PROMPT_OPTIMIZER_API_BASE to an "
-            "OpenAI-compatible proxy/base URL and PROMPT_OPTIMIZER_MODEL to the "
-            "matching model, or choose an OpenAI-compatible Hermes provider."
-        )
+def _parse_json_content(content: str) -> dict:
+    """Parse JSON from model text, stripping optional markdown fences."""
+    content = content.strip()
 
-    if not API_KEY:
-        raise RuntimeError(
-            "No API key found. Set PROMPT_OPTIMIZER_API_KEY, OPENAI_API_KEY, or HERMES_API_KEY."
-        )
+    # Extract JSON from response (may have markdown fences)
+    if content.startswith("```"):
+        lines = content.split("\n")
+        # Remove opening fence
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        # Remove closing fence
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        content = "\n".join(lines)
 
+    return json.loads(content)
+
+
+def _is_anthropic_base_url(base_url: str) -> bool:
+    """Return True when the configured API base URL points at Anthropic."""
+    normalized = base_url.lower().rstrip("/")
+    return "api.anthropic.com" in normalized or normalized.endswith("anthropic.com/v1")
+
+
+def _require_httpx():
+    """Import httpx with a helpful runtime error when the dependency is absent."""
     try:
         import httpx
     except ImportError as exc:
@@ -371,6 +375,17 @@ async def call_llm(
             "(or run: pip install httpx). "
             "Without httpx, the prompt-optimizer runtime cannot call the LLM API."
         ) from exc
+    return httpx
+
+
+async def _call_openai_compatible(
+    system_prompt: str,
+    user_message: str,
+    temperature: float = 0.1,
+    max_tokens: int = 4096,
+) -> dict:
+    """Call an OpenAI-compatible chat completions API and parse JSON response."""
+    httpx = _require_httpx()
 
     url = f"{API_BASE}/chat/completions"
     headers = {
@@ -394,22 +409,11 @@ async def call_llm(
                 response = await client.post(url, headers=headers, json=payload)
                 response.raise_for_status()
                 data = response.json()
-                content = data["choices"][0]["message"]["content"].strip()
+                content = data["choices"][0]["message"]["content"]
 
-            # Extract JSON from response (may have markdown fences)
-            if content.startswith("```"):
-                lines = content.split("\n")
-                # Remove opening fence
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                # Remove closing fence
-                if lines and lines[-1].strip() == "```":
-                    lines = lines[:-1]
-                content = "\n".join(lines)
+            return _parse_json_content(content)
 
-            return json.loads(content)
-
-        except (json.JSONDecodeError, KeyError, IndexError) as e:
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
             last_error = f"Failed to parse response (attempt {attempt + 1}): {e}"
             if attempt < MAX_RETRIES:
                 await asyncio.sleep(1)
@@ -421,6 +425,86 @@ async def call_llm(
                 continue
 
     raise RuntimeError(f"LLM call failed after {MAX_RETRIES + 1} attempts: {last_error}")
+
+
+async def _call_anthropic_messages(
+    system_prompt: str,
+    user_message: str,
+    temperature: float = 0.1,
+    max_tokens: int = 4096,
+) -> dict:
+    """Call Anthropic Messages API and parse JSON from text content blocks."""
+    httpx = _require_httpx()
+
+    url = f"{API_BASE or 'https://api.anthropic.com/v1'}/messages"
+    headers = {
+        "x-api-key": API_KEY,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    payload = {
+        "model": MODEL,
+        "system": system_prompt,
+        "messages": [{"role": "user", "content": user_message}],
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+
+    last_error = None
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+                response = await client.post(url, headers=headers, json=payload)
+                response.raise_for_status()
+                data = response.json()
+                content_blocks = data["content"]
+                content = "".join(
+                    block.get("text", "")
+                    for block in content_blocks
+                    if isinstance(block, dict) and block.get("type") == "text"
+                )
+
+            return _parse_json_content(content)
+
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            last_error = f"Failed to parse response (attempt {attempt + 1}): {e}"
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(1)
+                continue
+        except Exception as e:
+            last_error = str(e)
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(2)
+                continue
+
+    raise RuntimeError(f"LLM call failed after {MAX_RETRIES + 1} attempts: {last_error}")
+
+
+async def call_llm(
+    system_prompt: str,
+    user_message: str,
+    temperature: float = 0.1,
+    max_tokens: int = 4096,
+) -> dict:
+    """Call the configured LLM provider and parse JSON from response."""
+    if not API_KEY:
+        raise RuntimeError(
+            "No API key found. Set PROMPT_OPTIMIZER_API_KEY, OPENAI_API_KEY, or HERMES_API_KEY."
+        )
+
+    if PROVIDER == "anthropic" or _is_anthropic_base_url(API_BASE):
+        return await _call_anthropic_messages(system_prompt, user_message, temperature, max_tokens)
+
+    if PROVIDER not in _PROVIDER_DEFAULTS and not os.environ.get("PROMPT_OPTIMIZER_API_BASE", ""):
+        raise RuntimeError(
+            f"Hermes provider '{PROVIDER}' is not known to be OpenAI-compatible. "
+            "prompt-optimizer currently calls OpenAI-compatible /chat/completions "
+            "unless PROVIDER is 'anthropic' or API base URL points to Anthropic. "
+            "Set PROMPT_OPTIMIZER_API_BASE to a compatible proxy/base URL and "
+            "PROMPT_OPTIMIZER_MODEL to the matching model, or choose a supported Hermes provider."
+        )
+
+    return await _call_openai_compatible(system_prompt, user_message, temperature, max_tokens)
 
 
 # ── Checkers ───────────────────────────────────────────────────
