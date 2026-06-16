@@ -410,11 +410,19 @@ async def check_contradictions(prompt: str) -> dict:
             f"Проверь этот промпт на противоречия:\n\n---\n{prompt}\n---",
         )
         return {
+            "status": "ok",
+            "ok": True,
             "has_issues": result.get("has_issues", False),
             "issues": result.get("issues", []),
         }
     except Exception as e:
-        return {"has_issues": False, "issues": [], "error": str(e)}
+        return {
+            "status": "error",
+            "ok": False,
+            "has_issues": None,
+            "issues": [],
+            "error": str(e),
+        }
 
 
 async def check_format(prompt: str) -> dict:
@@ -425,11 +433,19 @@ async def check_format(prompt: str) -> dict:
             f"Проверь этот промпт на чёткость формата вывода:\n\n---\n{prompt}\n---",
         )
         return {
+            "status": "ok",
+            "ok": True,
             "has_issues": result.get("has_issues", False),
             "issues": result.get("issues", []),
         }
     except Exception as e:
-        return {"has_issues": False, "issues": [], "error": str(e)}
+        return {
+            "status": "error",
+            "ok": False,
+            "has_issues": None,
+            "issues": [],
+            "error": str(e),
+        }
 
 
 async def check_fewshot(prompt: str, examples: list[dict]) -> dict:
@@ -443,11 +459,19 @@ async def check_fewshot(prompt: str, examples: list[dict]) -> dict:
         )
         result = await call_llm(FEWSHOT_CHECKER_PROMPT, user_msg)
         return {
+            "status": "ok",
+            "ok": True,
             "has_issues": result.get("has_issues", False),
             "issues": result.get("issues", []),
         }
     except Exception as e:
-        return {"has_issues": False, "issues": [], "error": str(e)}
+        return {
+            "status": "error",
+            "ok": False,
+            "has_issues": None,
+            "issues": [],
+            "error": str(e),
+        }
 
 
 # ── Rewriters ──────────────────────────────────────────────────
@@ -512,12 +536,22 @@ async def cmd_check(prompt: str, examples: Optional[list[dict]] = None) -> dict:
 
     contradiction = results[0]
     format_issues = results[1]
-    fewshot = results[2] if len(results) > 2 else {"has_issues": False, "issues": []}
+    fewshot = results[2] if len(results) > 2 else {
+        "status": "ok",
+        "ok": True,
+        "has_issues": False,
+        "issues": [],
+    }
 
     has_any = (
         contradiction.get("has_issues", False)
         or format_issues.get("has_issues", False)
         or fewshot.get("has_issues", False)
+    )
+    has_errors = (
+        not contradiction.get("ok", False)
+        or not format_issues.get("ok", False)
+        or not fewshot.get("ok", False)
     )
 
     return {
@@ -525,6 +559,7 @@ async def cmd_check(prompt: str, examples: Optional[list[dict]] = None) -> dict:
         "format": format_issues,
         "fewshot": fewshot,
         "has_any_issues": has_any,
+        "has_errors": has_errors,
     }
 
 
