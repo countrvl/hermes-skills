@@ -77,7 +77,7 @@ def _hermes_dir() -> str:
     if xdg_config_home:
         return os.path.join(xdg_config_home, "hermes")
 
-    return os.path.join(os.path.expanduser("~"), ".config", "hermes")
+    return os.path.join(os.path.expanduser("~"), ".hermes")
 
 
 def _read_config_yaml() -> dict:
@@ -104,6 +104,8 @@ def _read_config_yaml() -> dict:
                         result["provider"] = stripped.split(":", 1)[1].strip().strip('"').strip("'")
                     elif stripped.startswith("default:"):
                         result["model"] = stripped.split(":", 1)[1].strip().strip('"').strip("'")
+                    elif stripped.startswith("api_key:"):
+                        result["api_key_ref"] = stripped.split(":", 1)[1].strip().strip('"').strip("'")
     except (OSError, IOError):
         pass
     return result
@@ -206,6 +208,23 @@ def _resolve_config() -> tuple[str, str, str, str]:
     #    Check process env before Hermes .env so explicit shell exports win.
     label = provider_auth.get("label", "")
     provider_key_env_vars = _provider_api_key_env_vars(provider, label)
+
+    # When provider is "custom", the standard lookup yields nothing.
+    # Extract the env var name from config.yaml's api_key: ${VAR} reference,
+    # then fall back to all known provider env vars.
+    if not provider_key_env_vars:
+        # Try config.yaml api_key reference: ${DEEPSEEK_API_KEY} → DEEPSEEK_API_KEY
+        api_key_ref = config.get("api_key_ref", "")
+        if api_key_ref.startswith("${") and api_key_ref.endswith("}"):
+            provider_key_env_vars = (api_key_ref[2:-1],)
+        if not provider_key_env_vars:
+            # Try all known provider env vars as a broad fallback
+            provider_key_env_vars = (
+                "DEEPSEEK_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+                "CLAUDE_API_KEY", "OPENROUTER_API_KEY", "GOOGLE_API_KEY",
+                "GEMINI_API_KEY", "GROQ_API_KEY", "XAI_API_KEY",
+            )
+
     if not api_key:
         for var in provider_key_env_vars:
             api_key = os.environ.get(var, "")
@@ -523,7 +542,7 @@ async def call_llm(
     if PROVIDER == "anthropic" or _is_anthropic_base_url(API_BASE):
         return await _call_anthropic_messages(system_prompt, user_message, temperature, max_tokens)
 
-    if PROVIDER not in _PROVIDER_DEFAULTS and not os.environ.get("PROMPT_OPTIMIZER_API_BASE", ""):
+    if PROVIDER not in _PROVIDER_DEFAULTS and not API_BASE and not os.environ.get("PROMPT_OPTIMIZER_API_BASE", ""):
         raise RuntimeError(
             f"Hermes provider '{PROVIDER}' is not known to be OpenAI-compatible. "
             "prompt-optimizer currently calls OpenAI-compatible /chat/completions "
