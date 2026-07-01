@@ -14,7 +14,7 @@ hermes skills tap add countrvl/hermes-skills
 hermes skills install countrvl/hermes-skills/prompt-optimizer
 
 # Install prompt-optimizer runtime dependencies
-pip install -r prompt-optimizer/requirements.txt
+pip install -r skills/prompt-optimizer/requirements.txt
 ```
 
 `tap add` only registers the source — it does **not** auto-install everything.
@@ -27,7 +27,7 @@ requests. If your Hermes Agent installs skills into a separate skill directory, 
 
 | Name | Description |
 |------|-------------|
-| [prompt-optimizer](prompt-optimizer/) | Multi-agent prompt optimizer — detects contradictions, format gaps, and few-shot inconsistencies, then surgically rewrites prompts. Two modes: build from scratch or analyze existing. Based on OpenAI Cookbook methodology. Powered by Python runtime. |
+| [prompt-optimizer](skills/prompt-optimizer/) | Multi-agent prompt optimizer — detects contradictions, format gaps, and few-shot inconsistencies, then surgically rewrites prompts. Two modes: build from scratch or analyze existing. Based on OpenAI Cookbook methodology. Powered by Python runtime. |
 
 ## How it works
 
